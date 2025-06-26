@@ -11,6 +11,7 @@ SQL became the core tool used for organizing, querying, and analyzing business d
 
 
 **_Key Data Analytics Techniques Applied_**
+
 🔹 Data Cleaning & Transformation:
 Utilized Joins, Common Table Expressions (CTEs), and Window Functions to clean and preprocess raw sales data, ensuring consistency and readiness for analysis.
 
