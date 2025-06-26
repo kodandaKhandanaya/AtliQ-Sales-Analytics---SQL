@@ -1,0 +1,198 @@
+--Ad HOC Analysis of AtliQ Hardware--
+
+-----------------------TASK-1------------------------------
+/*Croma India Product-wise Sales Report for Fiscal Year 2021
+
+Report of individual product sales aggregated on a monthly basis at the product level for Croma India customers for FY 2021 */
+
+#First let's create the Function for the fiscal year so that we don't have to write it in every query
+#Function to get fiscal year
+CREATE FUNCTION `get_fiscal_year`(calendar_date DATE) 
+RETURNS int
+DETERMINISTIC
+BEGIN
+     DECLARE fiscal_year INT;
+     SET fiscal_year = YEAR(DATE_ADD(calendar_date, INTERVAL 4 MONTH));
+     RETURN fiscal_year;
+END;
+
+#Query to Retrieve Sales Data for CROMA FY 2021
+SELECT 
+      s.date, s.product_code,
+      p.product, p.variant, s.sold_quantity, g.gross_price,
+      ROUND(g.gross_price*s.sold_quantity,2) as Total_Gross_Price
+FROM fact_sales_monthly s
+  JOIN dim_product p
+  ON 
+     p.product_code = s.product_code
+   JOIN fact_gross_price g
+   ON
+     g.product_code = s.product_code AND 
+     g.fiscal_year=get_fiscal_year(s.date)
+WHERE 
+    customer_code = 90002002 AND
+    get_fiscal_year(date)=2021
+ORDER BY date ASC
+LIMIT 1000000;
+
+-----------------------TASK-2------------------------------
+#But what if they ask you to retrieve the data for Multiple Customers like Amazon, flipkart, Neptune etc.,????
+#That's were the Stored Procedures will reduce the Burden for you
+#Stored Procedure is an Set of SQL steps (queries, conditions, loops, etc.) you can execute when needed
+
+#Let's create the stored procedure
+CREATE ` PROCEDURE `get_monthly_gross_sales`( c_code INT )
+BEGIN
+SELECT
+	s.date,
+    ROUND(SUM(g.gross_price*s.sold_quantity),2) as Monthly_sales
+From fact_sales_monthly s
+JOIN fact_gross_price g
+ON
+	 g.product_code = s.product_code AND
+     g.fiscal_year = get_fiscal_year(s.date)
+WHERE customer_code = c_code
+GROUP BY s.date
+ORDER BY s.date ASC;
+END
+
+That's it. Once you done then it will be easy to retrieve the data for multiple customers. 
+
+-----------------------TASK-3------------------------------
+/*Determine Market Badge Based on Sales Quantity
+
+Created a stored procedure that can determine the market badge based on the following logic:
+If total sold quantity > 5 million, that market is considered Gold, else it is Silver.*/
+
+#Write the code in the stored procedure so that it can be easy to give the market badge to the regions
+
+CREATE PROCEDURE `get_market_badge`( 
+     IN in_market VARCHAR(45),
+     IN in_fiscal_year YEAR,
+     OUT out_badge VARCHAR(45)
+   )
+BEGIN
+     DECLARE Total_sales INT DEFAULT 0;
+
+#default market to india
+   IF in_market = "" THEN
+      SET in_market = "india"; 
+   END IF;   
+     
+#retrieve total qty for a given market and fiscal year
+SELECT
+     SUM(sold_quantity) into Total_sales
+FROM fact_sales_monthly s
+JOIN dim_customer c
+ON 
+   s.customer_code = c.customer_code
+WHERE 
+     get_fiscal_year(s.date)=in_fiscal_year AND 
+     c.market=in_market
+GROUP BY c.market;
+
+#determain market badge
+    IF Total_sales > 5000000 THEN
+	   SET out_badge = "Gold";
+    ELSE 
+	   SET out_badge = "Silver";
+    END IF;
+END;
+
+-----------------------TASK-4------------------------------
+/*Bar Chart Report for FY 21 for Top 10 Customers by Net sales and %.*/
+WITH cte1 as (
+ SELECT 
+     customer, 
+     ROUND(SUM(net_sales)/1000000,2) as net_sales_mln		
+ FROM gdb0041.net_sales n
+ JOIN dim_customer c
+ ON
+   n.customer_code = c.customer_code
+ WHERE fiscal_year = 2021
+ GROUP BY customer)
+ 
+ SELECT *, ROUND((net_sales_mln)*100/sum(net_sales_mln) over(),2) as Percentage
+ FROM cte1
+ ORDER BY net_sales_mln DESC
+ LIMIT 10;
+
+we are using common table expressions because of it's reusability and it Separates sales aggregation logic from percentage calculation.
+Also export the output data in CSV format and use the bar chart visual for the desired output. 
+
+-----------------------TASK-5---------------------------
+/*Write a stored procedure to get the top n products by net sales for a given year.*/
+
+CREATE PROCEDURE `top_product_by_netsales`( 
+         in_fiscal_year INT,
+         in_top_n INT
+       )
+BEGIN
+SELECT 
+     product, 
+     ROUND(SUM(net_sales)/1000000,2) as net_sales_mln		
+FROM net_sales n
+WHERE fiscal_year = in_fiscal_year
+GROUP BY product
+ORDER BY net_sales_mln DESC
+LIMIT in_top_n;
+END;
+
+If you run the stored procedure then it will give you the single query were you can any fiscal year and top 5, 10 , 20 as per your need.
+
+
+-----------------------TASK-6----------------------------
+/*Retrieve the top 2 markets in every region by their gross sales amount in FY=2021.*/
+WITH CTE1 as
+  (SELECT
+	   c.region,
+       c.market,
+       ROUND(SUM(total_gross_price)/1000000,2) as gross_sales_mln
+   FROM gross_sales s
+   JOIN dim_customer c
+   ON
+       c.customer_code = s.customer_code
+   WHERE fiscal_year = 2021
+   GROUP BY c.region,c.market
+   ORDER BY gross_sales_mln DESC),
+   
+CTE2 as (SELECT *,
+         DENSE_RANK() OVER(PARTITION BY region ORDER BY gross_sales_mln DESC) as drnk
+FROM CTE1)
+
+SELECT * FROM CTE2 WHERE drnk <= 2;
+
+
+-----------------------TASK-7----------------------------
+/*Query to Get Top 3 Products per Division by Quantity Sold*/
+#let's create the stored procedure for the given task because it will give control towards the fiscal year and top 3(organised in order).
+
+CREATE PROCEDURE `top_products_nsales_share_perdivision`( 
+            in_fiscal_year INT,
+            in_top_n INT
+          )
+BEGIN
+WITH CTE1 as
+  (SELECT
+	   p.division,
+       p.product,
+       SUM(sold_quantity) as total_sales
+   FROM fact_sales_monthly s
+   JOIN dim_product p
+   ON
+       p.product_code = s.product_code
+   WHERE fiscal_year = in_fiscal_year
+   GROUP BY p.product,p.division),
+  
+ CTE2 as (SELECT *,
+      DENSE_RANK() OVER(PARTITION BY division ORDER BY total_sales DESC) as drnk
+FROM CTE1)
+
+SELECT * FROM CTE2 WHERE drnk <= in_top_n;
+END
+
+
+-- That's it For Now. Hope you find this Useful --
+Thank You!!
+
+
